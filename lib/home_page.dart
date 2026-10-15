@@ -10,6 +10,32 @@ import 'scan_store.dart';
 
 enum _Action { open, share, rename, delete }
 
+class _ScanConfig {
+  const _ScanConfig(this.label, this.formats, this.mode, this.pageLimit);
+
+  final String label;
+  final Set<DocumentFormat> formats;
+  final ScannerMode mode;
+  final int pageLimit;
+}
+
+/// Tried in order until the scanner starts. The first one is the full
+/// experience; the rest drop options one at a time.
+const _scanConfigs = <_ScanConfig>[
+  _ScanConfig(
+    'PDF + JPEG, full mode, 30 pages',
+    {DocumentFormat.pdf, DocumentFormat.jpeg},
+    ScannerMode.full,
+    30,
+  ),
+  _ScanConfig('PDF only, full mode, 30 pages', {DocumentFormat.pdf},
+      ScannerMode.full, 30),
+  _ScanConfig(
+      'PDF only, full mode, 1 page', {DocumentFormat.pdf}, ScannerMode.full, 1),
+  _ScanConfig(
+      'PDF only, base mode, 1 page', {DocumentFormat.pdf}, ScannerMode.base, 1),
+];
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -51,49 +77,123 @@ class _HomePageState extends State<HomePage> {
     return images is List ? images.whereType<String>().toList() : const [];
   }
 
+  /// Runs the scanner. If it fails to start, simpler configurations are tried
+  /// in turn (cancelling the scanner stops everything). When something fails,
+  /// the full error text is shown so it can be copied and reported.
   Future<void> _scan() async {
     if (_scanning) return;
     setState(() => _scanning = true);
 
-    final scanner = DocumentScanner(
-      options: DocumentScannerOptions(
-        documentFormats: {DocumentFormat.pdf, DocumentFormat.jpeg},
-        mode: ScannerMode.full,
-        pageLimit: 30,
-        isGalleryImport: true,
-      ),
-    );
-
+    final failures = <String>[];
     try {
-      final result = await scanner.scanDocument();
-      final pdf = result.pdf;
-      if (pdf == null) {
-        _toast('The scanner did not return a PDF.');
+      for (final config in _scanConfigs) {
+        final scanner = DocumentScanner(
+          options: DocumentScannerOptions(
+            documentFormats: config.formats,
+            mode: config.mode,
+            pageLimit: config.pageLimit,
+            isGalleryImport: true,
+          ),
+        );
+
+        DocumentScanningResult? result;
+        try {
+          result = await scanner.scanDocument();
+        } on PlatformException catch (e) {
+          final text = '${e.code} ${e.message ?? ''}'.toLowerCase();
+          if (text.contains('cancel')) {
+            _toast('Scan cancelled.');
+            return;
+          }
+          failures.add('${config.label}\n${_describe(e)}');
+        } finally {
+          try {
+            await scanner.close();
+          } catch (_) {
+            // Releasing the scanner is best effort.
+          }
+        }
+
+        if (result == null) continue;
+
+        final name = await _saveResult(result);
+        if (failures.isEmpty) {
+          _toast('Saved "$name"');
+        } else {
+          _toastWithDetails(
+            'Saved "$name" using simpler scanner options.',
+            failures,
+          );
+        }
         return;
       }
-      final item = await _store.save(
-        pdfUri: pdf.uri.toString(),
-        imageUris: _imagePaths(result),
-      );
-      await _refresh();
-      _toast('Saved "${item.name}"');
-    } on PlatformException catch (e) {
-      final text = '${e.code} ${e.message ?? ''}'.toLowerCase();
-      _toast(
-        text.contains('cancel')
-            ? 'Scan cancelled.'
-            : 'Scan failed: ${e.message ?? e.code}',
-      );
-    } catch (e) {
-      _toast('Scan failed: $e');
+      await _showReport(failures);
+    } catch (e, stack) {
+      await _showReport(['Saving the scan failed\n$e\n$stack']);
     } finally {
-      try {
-        await scanner.close();
-      } catch (_) {
-        // Releasing the scanner is best effort.
-      }
       if (mounted) setState(() => _scanning = false);
     }
+  }
+
+  Future<String> _saveResult(DocumentScanningResult result) async {
+    final pdf = result.pdf;
+    if (pdf == null) throw StateError('The scanner did not return a PDF.');
+    final item = await _store.save(
+      pdfUri: pdf.uri.toString(),
+      imageUris: _imagePaths(result),
+    );
+    await _refresh();
+    return item.name;
+  }
+
+  /// Error code, message, details and the first lines of the native stack
+  /// trace (which names the exception that was thrown on the Android side).
+  String _describe(PlatformException e) {
+    final trace = (e.stacktrace ?? '')
+        .split('\n')
+        .where((line) => line.trim().isNotEmpty)
+        .take(6)
+        .join('\n');
+    return 'code: ${e.code}\nmessage: ${e.message}\ndetails: ${e.details}'
+        '${trace.isEmpty ? '' : '\n$trace'}';
+  }
+
+  void _toastWithDetails(String message, List<String> failures) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 10),
+          action: SnackBarAction(
+            label: 'Details',
+            onPressed: () => _showReport(failures),
+          ),
+        ),
+      );
+  }
+
+  Future<void> _showReport(List<String> failures) async {
+    if (!mounted) return;
+    final report = failures.join('\n\n');
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Scanner problem'),
+        content: SingleChildScrollView(child: SelectableText(report)),
+        actions: [
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: report)),
+            child: const Text('Copy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _open(ScanItem item) async {
