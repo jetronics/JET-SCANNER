@@ -1,0 +1,25 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+migrate_working_dir/
+
+# Android
+android/.gradle/
+android/captures/
+android/local.properties
+android/key.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
+GeneratedPluginRegistrant.*
+*.jks
+*.keystore
+
+# IDEs and OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.log
