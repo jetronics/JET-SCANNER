@@ -44,3 +44,14 @@ jobs:
           name: doc-scanner-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
+      # Debug builds skip Android's code shrinker (R8). If scanning works in
+      # this APK but not in the release one, the shrinker is breaking the
+      # scanner library.
+      - run: flutter build apk --debug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doc-scanner-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
