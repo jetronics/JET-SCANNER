@@ -19,8 +19,8 @@ class _ScanConfig {
   final int pageLimit;
 }
 
-/// Tried in order until the scanner starts. The first one is the full
-/// experience; the rest drop options one at a time.
+/// Scanner settings, tried in order until the scanner starts. Simpler
+/// fallbacks can be added after the first entry if a device needs them.
 const _scanConfigs = <_ScanConfig>[
   _ScanConfig(
     'PDF + JPEG, full mode, 30 pages',
@@ -28,12 +28,6 @@ const _scanConfigs = <_ScanConfig>[
     ScannerMode.full,
     30,
   ),
-  _ScanConfig('PDF only, full mode, 30 pages', {DocumentFormat.pdf},
-      ScannerMode.full, 30),
-  _ScanConfig(
-      'PDF only, full mode, 1 page', {DocumentFormat.pdf}, ScannerMode.full, 1),
-  _ScanConfig(
-      'PDF only, base mode, 1 page', {DocumentFormat.pdf}, ScannerMode.base, 1),
 ];
 
 class HomePage extends StatefulWidget {
@@ -152,7 +146,7 @@ class _HomePageState extends State<HomePage> {
     final trace = (e.stacktrace ?? '')
         .split('\n')
         .where((line) => line.trim().isNotEmpty)
-        .take(6)
+        .take(14)
         .join('\n');
     return 'code: ${e.code}\nmessage: ${e.message}\ndetails: ${e.details}'
         '${trace.isEmpty ? '' : '\n$trace'}';
