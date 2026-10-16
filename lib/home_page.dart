@@ -6,29 +6,12 @@ import 'package:google_mlkit_document_scanner/google_mlkit_document_scanner.dart
 import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'export_page.dart';
 import 'scan_store.dart';
+import 'settings.dart';
+import 'viewer_page.dart';
 
 enum _Action { open, share, rename, delete }
-
-class _ScanConfig {
-  const _ScanConfig(this.label, this.formats, this.mode, this.pageLimit);
-
-  final String label;
-  final Set<DocumentFormat> formats;
-  final ScannerMode mode;
-  final int pageLimit;
-}
-
-/// Scanner settings, tried in order until the scanner starts. Simpler
-/// fallbacks can be added after the first entry if a device needs them.
-const _scanConfigs = <_ScanConfig>[
-  _ScanConfig(
-    'PDF + JPEG, full mode, 30 pages',
-    {DocumentFormat.pdf, DocumentFormat.jpeg},
-    ScannerMode.full,
-    30,
-  ),
-];
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -65,79 +48,84 @@ class _HomePageState extends State<HomePage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  // ---- Scanning ---------------------------------------------------------------
+
   /// Image paths from the scanner, tolerant of the field being null or empty.
   List<String> _imagePaths(DocumentScanningResult result) {
     final dynamic images = result.images;
-    return images is List ? images.whereType<String>().toList() : const [];
+    return images is List
+        ? images.whereType<String>().map(uriToPath).toList()
+        : const [];
   }
 
-  /// Runs the scanner. If it fails to start, simpler configurations are tried
-  /// in turn (cancelling the scanner stops everything). When something fails,
-  /// the full error text is shown so it can be copied and reported.
-  Future<void> _scan() async {
-    if (_scanning) return;
-    setState(() => _scanning = true);
+  /// Opens the scanner and returns the scanned page images, or null when the
+  /// user cancelled or something went wrong (which is reported on screen).
+  Future<List<String>?> _runScanner() async {
+    final scanner = DocumentScanner(
+      options: DocumentScannerOptions(
+        // Pages come back as images; the export screen builds the final file.
+        documentFormats: {DocumentFormat.jpeg},
+        mode: ScannerMode.full,
+        pageLimit: 30,
+        isGalleryImport: true,
+      ),
+    );
 
-    final failures = <String>[];
     try {
-      for (final config in _scanConfigs) {
-        final scanner = DocumentScanner(
-          options: DocumentScannerOptions(
-            documentFormats: config.formats,
-            mode: config.mode,
-            pageLimit: config.pageLimit,
-            isGalleryImport: true,
-          ),
-        );
-
-        DocumentScanningResult? result;
-        try {
-          result = await scanner.scanDocument();
-        } on PlatformException catch (e) {
-          final text = '${e.code} ${e.message ?? ''}'.toLowerCase();
-          if (text.contains('cancel')) {
-            _toast('Scan cancelled.');
-            return;
-          }
-          failures.add('${config.label}\n${_describe(e)}');
-        } finally {
-          try {
-            await scanner.close();
-          } catch (_) {
-            // Releasing the scanner is best effort.
-          }
-        }
-
-        if (result == null) continue;
-
-        final name = await _saveResult(result);
-        if (failures.isEmpty) {
-          _toast('Saved "$name"');
-        } else {
-          _toastWithDetails(
-            'Saved "$name" using simpler scanner options.',
-            failures,
-          );
-        }
-        return;
+      final result = await scanner.scanDocument();
+      final pages = _imagePaths(result);
+      if (pages.isEmpty) {
+        _toast('The scanner returned no pages.');
+        return null;
       }
-      await _showReport(failures);
+      return pages;
+    } on PlatformException catch (e) {
+      final text = '${e.code} ${e.message ?? ''}'.toLowerCase();
+      if (text.contains('cancel')) {
+        _toast('Scan cancelled.');
+      } else {
+        await _showReport(_describe(e));
+      }
+      return null;
     } catch (e, stack) {
-      await _showReport(['Saving the scan failed\n$e\n$stack']);
+      await _showReport('$e\n$stack');
+      return null;
     } finally {
-      if (mounted) setState(() => _scanning = false);
+      try {
+        await scanner.close();
+      } catch (_) {
+        // Releasing the scanner is best effort.
+      }
     }
   }
 
-  Future<String> _saveResult(DocumentScanningResult result) async {
-    final pdf = result.pdf;
-    if (pdf == null) throw StateError('The scanner did not return a PDF.');
-    final item = await _store.save(
-      pdfUri: pdf.uri.toString(),
-      imageUris: _imagePaths(result),
+  Future<void> _scan() async {
+    if (_scanning) return;
+    setState(() => _scanning = true);
+    final pages = await _runScanner();
+    if (mounted) setState(() => _scanning = false);
+    if (pages == null || !mounted) return;
+
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ExportPage(pagePaths: pages, store: _store),
+      ),
     );
-    await _refresh();
-    return item.name;
+
+    // The scanner's temporary page images are no longer needed.
+    for (final path in pages) {
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } on FileSystemException {
+        // Temporary files; nothing to do if one cannot be removed.
+      }
+    }
+
+    if (saved == true) {
+      await _refresh();
+      _toast('Saved.');
+    }
   }
 
   /// Error code, message, details and the first lines of the native stack
@@ -152,25 +140,8 @@ class _HomePageState extends State<HomePage> {
         '${trace.isEmpty ? '' : '\n$trace'}';
   }
 
-  void _toastWithDetails(String message, List<String> failures) {
+  Future<void> _showReport(String report) async {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: const Duration(seconds: 10),
-          action: SnackBarAction(
-            label: 'Details',
-            onPressed: () => _showReport(failures),
-          ),
-        ),
-      );
-  }
-
-  Future<void> _showReport(List<String> failures) async {
-    if (!mounted) return;
-    final report = failures.join('\n\n');
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -190,8 +161,19 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // ---- Library actions -----------------------------------------------------------
+
   Future<void> _open(ScanItem item) async {
-    final result = await OpenFilex.open(item.pdf.path, type: 'application/pdf');
+    if (item.format != OutputFormat.pdf) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(builder: (_) => ViewerPage(item: item)),
+      );
+      return;
+    }
+    final result = await OpenFilex.open(
+      item.files.first.path,
+      type: 'application/pdf',
+    );
     if (result.type == ResultType.done) return;
     _toast(
       result.type == ResultType.noAppToOpen
@@ -201,12 +183,20 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _share(ScanItem item) async {
-    await SharePlus.instance.share(
-      ShareParams(
-        files: [XFile(item.pdf.path, mimeType: 'application/pdf')],
-        subject: item.name,
-      ),
-    );
+    try {
+      final files = await _store.shareFiles(item);
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [
+            for (final file in files)
+              XFile(file.path, mimeType: item.format.mimeType),
+          ],
+          subject: item.name,
+        ),
+      );
+    } on FileSystemException catch (e) {
+      _toast('Could not share: ${e.message}');
+    }
   }
 
   Future<void> _rename(ScanItem item) async {
@@ -216,13 +206,9 @@ class _HomePageState extends State<HomePage> {
     );
     if (newName == null) return;
     try {
-      final used = await _store.rename(item, newName);
+      await _store.rename(item, newName);
       await _refresh();
-      _toast(
-        used == sanitizeName(newName)
-            ? 'Renamed.'
-            : 'That name is taken, saved as "$used".',
-      );
+      _toast('Renamed.');
     } on ArgumentError {
       _toast('The name cannot be empty.');
     } on FileSystemException catch (e) {
@@ -271,6 +257,8 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // ---- UI ---------------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
     final Widget body;
@@ -298,7 +286,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Doc Scanner')),
+      appBar: AppBar(title: const Text('Jet Scanner')),
       body: body,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _scanning ? null : _scan,
@@ -329,8 +317,16 @@ class _ScanTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final thumb = item.thumbnail;
+    final details = <String>[
+      item.format.label,
+      paperById(item.paperId).short,
+      if (item.pages > 0) (item.pages == 1 ? '1 page' : '${item.pages} pages'),
+      _formatSize(item.sizeBytes),
+    ];
+
     return ListTile(
       onTap: onTap,
+      isThreeLine: true,
       leading: SizedBox(
         width: 48,
         height: 56,
@@ -347,9 +343,7 @@ class _ScanTile extends StatelessWidget {
         ),
       ),
       title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-        '${_formatDate(item.modified)}  •  ${_formatSize(item.sizeBytes)}',
-      ),
+      subtitle: Text('${_formatDate(item.created)}\n${details.join('  •  ')}'),
       trailing: PopupMenuButton<_Action>(
         onSelected: onAction,
         itemBuilder: (context) => const [

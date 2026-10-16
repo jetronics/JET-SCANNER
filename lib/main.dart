@@ -3,24 +3,27 @@ import 'package:flutter/material.dart';
 import 'home_page.dart';
 
 void main() {
-  runApp(const DocScannerApp());
+  runApp(const JetScannerApp());
 }
 
-class DocScannerApp extends StatelessWidget {
-  const DocScannerApp({super.key});
+class JetScannerApp extends StatelessWidget {
+  const JetScannerApp({super.key});
+
+  // The blue of the app icon.
+  static const Color _seed = Color(0xFF0047D3);
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Doc Scanner',
+      title: 'Jet Scanner',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
+        colorScheme: ColorScheme.fromSeed(seedColor: _seed),
         useMaterial3: true,
       ),
       darkTheme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.teal,
+          seedColor: _seed,
           brightness: Brightness.dark,
         ),
         useMaterial3: true,

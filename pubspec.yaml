@@ -1,7 +1,7 @@
 name: doc_scanner
-description: Android document scanner - capture, crop, filter and save multi-page PDFs.
+description: Jet Scanner - capture, crop, adjust and save documents as PDF, JPEG or PNG.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.8.0
@@ -13,6 +13,9 @@ dependencies:
   path_provider: ^2.1.5
   share_plus: ^13.3.1
   open_filex: ^4.7.0
+  # Ranges, not pins: pub picks the newest version the installed Flutter supports.
+  image: ^4.5.0
+  pdf: ^3.11.0
 
 dev_dependencies:
   flutter_test:
