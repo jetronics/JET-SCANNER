@@ -13,6 +13,7 @@ dependencies:
   path_provider: ^2.1.5
   share_plus: ^13.3.1
   open_filex: ^4.7.0
+  pdf_combiner: ^6.2.2
   # Ranges, not pins: pub picks the newest version the installed Flutter supports.
   image: ^4.5.0
   pdf: ^3.11.0

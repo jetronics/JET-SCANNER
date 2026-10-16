@@ -6,41 +6,67 @@ import 'package:flutter/material.dart';
 import 'scan_store.dart';
 import 'settings.dart';
 
-/// Shown right after scanning: preview the pages, choose paper size, format,
-/// brightness and contrast, then save. Pops with `true` when saved.
+/// Preview and edit the pages of a scan: choose paper size and format, set
+/// brightness and contrast (for all pages or one at a time), reorder or remove
+/// pages, then save.
+///
+/// Used right after scanning ([editing] is null) and to edit a saved scan
+/// again ([editing] is that scan, which is replaced on save). Pops with `true`
+/// when something was saved.
 class ExportPage extends StatefulWidget {
-  const ExportPage({super.key, required this.pagePaths, required this.store});
+  const ExportPage({
+    super.key,
+    required this.pages,
+    required this.store,
+    this.editing,
+  });
 
-  final List<String> pagePaths;
+  final List<PageSpec> pages;
   final ScanStore store;
+  final ScanItem? editing;
 
   @override
   State<ExportPage> createState() => _ExportPageState();
 }
 
-class _ExportPageState extends State<ExportPage> {
-  late final TextEditingController _name =
-      TextEditingController(text: widget.store.defaultName());
-  final PageController _pages = PageController();
-  final Map<int, Future<Size>> _sizes = {};
+/// A page being edited. Mutable so the sliders can change it in place.
+class _EditPage {
+  _EditPage(this.path, this.brightness, this.contrast);
 
-  PaperSize _paper = a4Paper;
-  OutputFormat _format = OutputFormat.pdf;
-  double _brightness = 0;
-  double _contrast = 0;
+  final String path;
+  double brightness;
+  double contrast;
+}
+
+class _ExportPageState extends State<ExportPage> {
+  late final TextEditingController _name = TextEditingController(
+    text: widget.editing?.name ?? widget.store.defaultName(),
+  );
+  final PageController _pageController = PageController();
+  final Map<String, Future<Size>> _sizes = {};
+
+  late final List<_EditPage> _pages = [
+    for (final p in widget.pages) _EditPage(p.path, p.brightness, p.contrast),
+  ];
+  late PaperSize _paper = paperById(widget.editing?.paperId);
+  late OutputFormat _format = widget.editing?.format ?? OutputFormat.pdf;
+  late bool _applyAll = _allSame();
   int _current = 0;
   bool _saving = false;
+  bool _dirty = false;
+
+  bool get _isNew => widget.editing == null;
 
   @override
   void initState() {
     super.initState();
-    _loadPrefs();
+    if (_isNew) _loadPrefs();
   }
 
   @override
   void dispose() {
     _name.dispose();
-    _pages.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -53,9 +79,17 @@ class _ExportPageState extends State<ExportPage> {
     });
   }
 
+  bool _allSame() {
+    if (_pages.length < 2) return true;
+    final first = _pages.first;
+    return _pages.every(
+      (p) => p.brightness == first.brightness && p.contrast == first.contrast,
+    );
+  }
+
   /// Pixel size of a page, read from the file header without decoding it.
-  Future<Size> _sizeOf(int index) => _sizes.putIfAbsent(index, () async {
-        final bytes = await File(widget.pagePaths[index]).readAsBytes();
+  Future<Size> _sizeOf(String path) => _sizes.putIfAbsent(path, () async {
+        final bytes = await File(path).readAsBytes();
         final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
         try {
           final descriptor = await ui.ImageDescriptor.encoded(buffer);
@@ -77,12 +111,92 @@ class _ExportPageState extends State<ExportPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  // ---- Editing -----------------------------------------------------------------
+
+  void _setBrightness(double value) => setState(() {
+        _dirty = true;
+        if (_applyAll) {
+          for (final p in _pages) {
+            p.brightness = value;
+          }
+        } else {
+          _pages[_current].brightness = value;
+        }
+      });
+
+  void _setContrast(double value) => setState(() {
+        _dirty = true;
+        if (_applyAll) {
+          for (final p in _pages) {
+            p.contrast = value;
+          }
+        } else {
+          _pages[_current].contrast = value;
+        }
+      });
+
+  /// Switching on copies the current page's values to every page.
+  void _toggleApplyAll(bool on) => setState(() {
+        _applyAll = on;
+        if (on) {
+          final source = _pages[_current];
+          for (final p in _pages) {
+            p.brightness = source.brightness;
+            p.contrast = source.contrast;
+          }
+          _dirty = true;
+        }
+      });
+
+  void _resetAdjustments() => setState(() {
+        _dirty = true;
+        for (final p in _applyAll ? _pages : [_pages[_current]]) {
+          p.brightness = 0;
+          p.contrast = 0;
+        }
+      });
+
+  void _showPage(int index) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_pageController.hasClients) _pageController.jumpToPage(index);
+    });
+  }
+
+  void _movePage(int delta) {
+    final target = _current + delta;
+    if (target < 0 || target >= _pages.length) return;
+    setState(() {
+      final page = _pages.removeAt(_current);
+      _pages.insert(target, page);
+      _current = target;
+      _dirty = true;
+    });
+    _showPage(target);
+  }
+
+  void _removePage() {
+    if (_pages.length < 2) return;
+    setState(() {
+      _pages.removeAt(_current);
+      if (_current >= _pages.length) _current = _pages.length - 1;
+      _dirty = true;
+    });
+    _showPage(_current);
+    _snack('Page removed. It is gone for good once you save.');
+  }
+
+  // ---- Leaving and saving ---------------------------------------------------------
+
   Future<bool> _confirmDiscard() async {
     final discard = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Discard this scan?'),
-        content: const Text('The scanned pages have not been saved yet.'),
+        title: Text(_isNew ? 'Discard this scan?' : 'Discard your changes?'),
+        content: Text(
+          _isNew
+              ? 'The scanned pages have not been saved yet.'
+              : 'Your changes to this scan have not been saved.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -108,17 +222,21 @@ class _ExportPageState extends State<ExportPage> {
     setState(() => _saving = true);
 
     try {
-      await widget.store.create(
+      await widget.store.save(
         name: name,
-        pagePaths: widget.pagePaths,
+        pages: [
+          for (final p in _pages)
+            PageSpec(p.path, brightness: p.brightness, contrast: p.contrast),
+        ],
         format: _format,
         paper: _paper,
-        brightness: _brightness,
-        contrast: _contrast,
+        replacing: widget.editing,
       );
-      await widget.store.savePrefs(
-        ExportPrefs(paperId: _paper.id, formatId: _format.id),
-      );
+      if (_isNew) {
+        await widget.store.savePrefs(
+          ExportPrefs(paperId: _paper.id, formatId: _format.id),
+        );
+      }
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e, stack) {
@@ -140,44 +258,40 @@ class _ExportPageState extends State<ExportPage> {
     }
   }
 
+  // ---- UI ---------------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
-    final pageCount = widget.pagePaths.length;
-
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop || _saving) return;
+        if (!_isNew && !_dirty) {
+          Navigator.pop(context, false);
+          return;
+        }
         if (await _confirmDiscard() && mounted) {
           Navigator.pop(context, false);
         }
       },
       child: Scaffold(
-        appBar: AppBar(title: const Text('Export')),
+        appBar: AppBar(title: Text(_isNew ? 'Export' : 'Edit scan')),
         body: Column(
           children: [
             Expanded(
               flex: 5,
               child: PageView.builder(
-                controller: _pages,
-                itemCount: pageCount,
+                controller: _pageController,
+                itemCount: _pages.length,
                 onPageChanged: (i) => setState(() => _current = i),
-                itemBuilder: (context, index) => _buildPreview(index),
+                itemBuilder: (context, index) => _buildPreview(_pages[index]),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                pageCount == 1
-                    ? '1 page'
-                    : 'Page ${_current + 1} of $pageCount  (swipe)',
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-            ),
+            _buildPageBar(),
             Expanded(
               flex: 6,
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
                 child: _buildSettings(),
               ),
             ),
@@ -203,11 +317,47 @@ class _ExportPageState extends State<ExportPage> {
     );
   }
 
-  /// One page, shown as it will be placed on the chosen paper, with the
+  /// Page counter, with move and remove buttons when there are several pages.
+  Widget _buildPageBar() {
+    final count = _pages.length;
+    final style = Theme.of(context).textTheme.labelMedium;
+    if (count == 1) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text('1 page', style: style),
+      );
+    }
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        IconButton(
+          tooltip: 'Move page earlier',
+          onPressed: _saving || _current == 0 ? null : () => _movePage(-1),
+          icon: const Icon(Icons.chevron_left),
+        ),
+        Text('Page ${_current + 1} of $count', style: style),
+        IconButton(
+          tooltip: 'Move page later',
+          onPressed:
+              _saving || _current >= count - 1 ? null : () => _movePage(1),
+          icon: const Icon(Icons.chevron_right),
+        ),
+        const SizedBox(width: 16),
+        IconButton(
+          tooltip: 'Remove this page',
+          onPressed: _saving ? null : _removePage,
+          icon: const Icon(Icons.delete_outline),
+        ),
+      ],
+    );
+  }
+
+  /// One page, shown as it will be placed on the chosen paper, with its
   /// brightness and contrast applied.
-  Widget _buildPreview(int index) {
+  Widget _buildPreview(_EditPage page) {
     return FutureBuilder<Size>(
-      future: _sizeOf(index),
+      key: ValueKey(page.path),
+      future: _sizeOf(page.path),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return const Center(child: Text('Could not load this page.'));
@@ -231,12 +381,12 @@ class _ExportPageState extends State<ExportPage> {
                 child: ColorFiltered(
                   colorFilter: ColorFilter.matrix(
                     previewMatrix(
-                      brightness: _brightness,
-                      contrast: _contrast,
+                      brightness: page.brightness,
+                      contrast: page.contrast,
                     ),
                   ),
                   child: Image.file(
-                    File(widget.pagePaths[index]),
+                    File(page.path),
                     fit: BoxFit.contain,
                     cacheWidth: 1400,
                   ),
@@ -250,12 +400,18 @@ class _ExportPageState extends State<ExportPage> {
   }
 
   Widget _buildSettings() {
+    final page = _pages[_current];
+    final hasAdjustments = _applyAll
+        ? _pages.any((p) => p.brightness != 0 || p.contrast != 0)
+        : (page.brightness != 0 || page.contrast != 0);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         TextField(
           controller: _name,
           enabled: !_saving,
+          onChanged: (_) => _dirty = true,
           decoration: const InputDecoration(
             labelText: 'Name',
             border: OutlineInputBorder(),
@@ -273,7 +429,12 @@ class _ExportPageState extends State<ExportPage> {
               DropdownMenuEntry<PaperSize>(value: paper, label: paper.label),
           ],
           onSelected: (paper) {
-            if (paper != null) setState(() => _paper = paper);
+            if (paper != null) {
+              setState(() {
+                _paper = paper;
+                _dirty = true;
+              });
+            }
           },
         ),
         const SizedBox(height: 12),
@@ -286,11 +447,14 @@ class _ExportPageState extends State<ExportPage> {
               ),
           ],
           selected: {_format},
-          onSelectionChanged:
-              _saving ? null : (selection) => setState(() => _format = selection.first),
+          onSelectionChanged: _saving
+              ? null
+              : (selection) => setState(() {
+                    _format = selection.first;
+                    _dirty = true;
+                  }),
         ),
-        if (_format != OutputFormat.pdf &&
-            widget.pagePaths.length > 1) ...[
+        if (_format != OutputFormat.pdf && _pages.length > 1) ...[
           const SizedBox(height: 4),
           Text(
             'Each page is saved as its own image.',
@@ -298,32 +462,35 @@ class _ExportPageState extends State<ExportPage> {
           ),
         ],
         const SizedBox(height: 8),
+        if (_pages.length > 1)
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Same brightness and contrast on every page'),
+            value: _applyAll,
+            onChanged: _saving ? null : _toggleApplyAll,
+          ),
         _SliderRow(
           label: 'Brightness',
-          value: _brightness,
+          value: page.brightness,
           min: -100,
           max: 100,
           divisions: 40,
-          onChanged: _saving ? null : (v) => setState(() => _brightness = v),
+          onChanged: _saving ? null : _setBrightness,
         ),
         _SliderRow(
           label: 'Contrast',
-          value: _contrast,
+          value: page.contrast,
           min: -50,
           max: 100,
           divisions: 30,
-          onChanged: _saving ? null : (v) => setState(() => _contrast = v),
+          onChanged: _saving ? null : _setContrast,
         ),
         Align(
           alignment: Alignment.centerRight,
           child: TextButton(
-            onPressed: _saving || (_brightness == 0 && _contrast == 0)
-                ? null
-                : () => setState(() {
-                      _brightness = 0;
-                      _contrast = 0;
-                    }),
-            child: const Text('Reset'),
+            onPressed: _saving || !hasAdjustments ? null : _resetAdjustments,
+            child: Text(_applyAll ? 'Reset' : 'Reset this page'),
           ),
         ),
       ],

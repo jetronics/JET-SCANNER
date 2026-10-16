@@ -28,8 +28,10 @@ class RenderRequest {
   final String outDir;
   final String formatId;
   final String paperId;
-  final double brightness;
-  final double contrast;
+
+  /// One value per page, in the same order as [pagePaths].
+  final List<double> brightness;
+  final List<double> contrast;
 }
 
 /// Writes the document (and a thumbnail) into [RenderRequest.outDir] and
@@ -40,15 +42,15 @@ Future<List<String>> renderDocument(RenderRequest request) =>
 Future<List<String>> _render(RenderRequest request) async {
   final format = OutputFormat.fromId(request.formatId);
   final paper = paperById(request.paperId);
-  final unchanged = request.brightness == 0 && request.contrast == 0;
-  final lut = unchanged
-      ? null
-      : buildLut(brightness: request.brightness, contrast: request.contrast);
-
   final pdf = format == OutputFormat.pdf ? pw.Document() : null;
   final written = <String>[];
 
   for (var i = 0; i < request.pagePaths.length; i++) {
+    final brightness = request.brightness[i];
+    final contrast = request.contrast[i];
+    final lut = (brightness == 0 && contrast == 0)
+        ? null
+        : buildLut(brightness: brightness, contrast: contrast);
     final page = _loadAdjusted(request.pagePaths[i], lut);
 
     if (i == 0) {

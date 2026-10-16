@@ -13,7 +13,10 @@ The capture screen is Google's ML Kit Document Scanner, so edge detection, persp
   - **Format:** PDF (all pages in one file), JPEG or PNG (one image per page)
   - **Brightness and contrast** sliders, applied to the saved file exactly as previewed
   - The last paper size and format you used are remembered
-- Library of saved scans with thumbnails: open, share, rename, delete
+- Library of saved scans with thumbnails: open, edit, share, rename, delete
+- **Edit a saved scan** at any time (menu on the scan, then **Edit**): change the paper size or format, adjust brightness and contrast, reorder pages, remove pages, rename. The app keeps the original scanned pages, so edits never degrade the picture.
+- **Brightness and contrast per page:** the switch "Same brightness and contrast on every page" is on by default. Turn it off to adjust one page on its own, for example a darker page in the middle of a document.
+- **Combine PDFs:** tap the merge icon at the top of the library (or long-press a scan), tap two or more PDFs in the order you want them joined, then **Combine**. The originals are kept. Combining works on any PDF scan, including ones saved by earlier versions of the app.
 
 Landscape scans get a landscape page, portrait scans a portrait page. Pages are centred on the paper on a white background and are never distorted.
 
@@ -71,12 +74,14 @@ Copy `app-release.apk` to the phone, open it, and allow "Install unknown apps" f
 
 - The release APK is signed with the debug key, which is fine for personal use. Publishing to Google Play needs your own keystore.
 - Scans live in the app's private storage, so uninstalling the app deletes them. Use Share to keep a copy elsewhere.
-- Scans saved by the first version of the app are moved into the new library layout automatically.
+- Scans saved by the first version of the app are moved into the new library layout automatically. Scans saved before editing existed (the first two versions) can still be shared and combined, but cannot be edited, because their original pages were not kept. Scan them again to make them editable.
+- A combined PDF can be edited again if every PDF that went into it can be edited.
+- Edited and combined scans keep the original pages, so the app uses roughly twice the storage of the final files.
 - If Gradle complains about the Java version, change `java-version` in `.github/workflows/build-apk.yml` or install a matching JDK locally.
 
 ## Ideas for later
 
 - OCR so PDFs are searchable (`google_mlkit_text_recognition`)
 - Save JPEG/PNG straight to the phone gallery or Downloads folder
-- Merge and split PDFs, reorder or delete individual pages
+- Split a PDF, import PDFs from other apps to combine them
 - Standalone camera and crop screen (no Google Play services needed)
