@@ -15,7 +15,7 @@ void main() {
     work = Directory.systemTemp.createTempSync('jet_scanner_test_');
     pages = <String>[];
 
-    // Page 1: landscape, mid-grey. Page 2: portrait, light grey.
+    // Page 1: landscape, grey 100. Page 2: portrait, grey 200.
     final specs = [(600, 400, 100), (400, 600, 200)];
     for (var i = 0; i < specs.length; i++) {
       final (w, h, grey) = specs[i];
@@ -32,11 +32,11 @@ void main() {
   Future<(Directory, List<String>)> run(
     OutputFormat format,
     String paperId, {
-    double brightness = 0,
-    double contrast = 0,
+    List<double> brightness = const [0, 0],
+    List<double> contrast = const [0, 0],
   }) async {
     final out = Directory(
-      '${work.path}/out_${format.id}_${paperId}_${brightness}_$contrast',
+      '${work.path}/out_${format.id}_${paperId}_${brightness.join(',')}_${contrast.join(',')}',
     )..createSync();
     final files = await renderDocument(
       RenderRequest(
@@ -82,17 +82,33 @@ void main() {
     expect((first.width, first.height), (600, 400));
   });
 
-  test('brightness is applied to the saved pixels', () async {
+  test('each page gets its own brightness', () async {
+    // Page 1 (grey 100) +50 -> 150. Page 2 (grey 200) -50 -> 150.
     final (out, _) = await run(
       OutputFormat.png,
       'original',
-      brightness: 50,
+      brightness: const [50, -50],
     );
     final first = img.decodeImage(
       File('${out.path}/page-1.png').readAsBytesSync(),
     )!;
-    final pixel = first.getPixel(300, 200);
-    // Source grey 100 + 50 brightness = 150 (JPEG compression allows a little drift).
-    expect(pixel.r.toInt(), inInclusiveRange(145, 155));
+    final second = img.decodeImage(
+      File('${out.path}/page-2.png').readAsBytesSync(),
+    )!;
+    // JPEG compression of the source allows a little drift.
+    expect(first.getPixel(300, 200).r.toInt(), inInclusiveRange(145, 155));
+    expect(second.getPixel(200, 300).r.toInt(), inInclusiveRange(145, 155));
+  });
+
+  test('pages with no adjustment are left untouched', () async {
+    final (out, _) = await run(
+      OutputFormat.png,
+      'original',
+      brightness: const [0, 50],
+    );
+    final first = img.decodeImage(
+      File('${out.path}/page-1.png').readAsBytesSync(),
+    )!;
+    expect(first.getPixel(300, 200).r.toInt(), inInclusiveRange(95, 105));
   });
 }

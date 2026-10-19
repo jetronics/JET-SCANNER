@@ -79,6 +79,20 @@ String outputFileName(OutputFormat format, int pageIndex) =>
         ? 'output.pdf'
         : 'page-${pageIndex + 1}.${format.extension}';
 
+/// Folder (inside a document's folder) that keeps the original scanned pages,
+/// so a scan can be edited again later.
+const String sourceDirName = 'source';
+
+/// One page going into a document: the original scanned image plus the
+/// brightness and contrast chosen for that page.
+class PageSpec {
+  const PageSpec(this.path, {this.brightness = 0, this.contrast = 0});
+
+  final String path;
+  final double brightness;
+  final double contrast;
+}
+
 // ---- Brightness and contrast ------------------------------------------------
 //
 // Both the on-screen preview and the exported pixels use the same formula, so
